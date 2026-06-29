@@ -1,0 +1,18 @@
+# DreamerV3 configuration for the LIMO environment
+# TODO: fill with environment-specific parameters
+
+defaults:
+  - default
+
+env:
+  name: limo
+  observation_shape: 23
+  action_dim: 2
+  max_steps: 500
+  dt: 0.05
+
+training:
+  total_steps: 1_000_000
+  batch_size: 16
+  sequence_length: 64
+  learning_rate: 3e-4

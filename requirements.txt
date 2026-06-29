@@ -1,0 +1,13 @@
+gymnasium>=0.29
+stable-baselines3>=2.0
+torch>=2.0
+numpy
+numba
+cvxpy
+osqp
+coppeliasim-zmqremoteapi-client
+attridict
+pandas
+plotly
+imageio
+pyyaml

@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pth
+*.zip
+checkpoints/
+metrics/
+plots/
+videos/
+.env
+*.egg-info
+dist/
+build/
