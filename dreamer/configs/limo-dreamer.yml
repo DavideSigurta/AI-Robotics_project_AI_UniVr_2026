@@ -1,18 +1,95 @@
 # DreamerV3 configuration for the LIMO environment
-# TODO: fill with environment-specific parameters
+environmentName: LimoCustomEnv
+runName: v1
+seed: 42
 
-defaults:
-  - default
+gradientSteps: 60000
+replayRatio: 100
+saveMetrics: True
+saveCheckpoints: True
+checkpointInterval: 5000
+resume: False
+checkpointToLoad: 50k
 
-env:
-  name: limo
-  observation_shape: 23
-  action_dim: 2
-  max_steps: 500
-  dt: 0.05
+episodesBeforeStart: 10
+numInteractionEpisodes: 1
+numEvaluationEpisodes: 5
 
-training:
-  total_steps: 1_000_000
-  batch_size: 16
-  sequence_length: 64
-  learning_rate: 3e-4
+dreamer:
+    batchSize: 32
+    batchLength: 32
+    imaginationHorizon: 10
+
+    recurrentSize: 256
+    latentLength: 16
+    latentClasses: 16
+    encodedObsSize: 128
+
+    useContinuationPrediction: True
+    actorLR: 0.00004
+    criticLR: 0.0001
+    worldModelLR: 0.0002
+    gradientNormType: 2
+    gradientClip: 100
+
+    discount: 0.99
+    lambda_: 0.95
+    freeNats: 1
+    betaPrior: 1.0
+    betaPosterior: 0.1
+    entropyScale: 0.001
+
+    buffer:
+        capacity: 100000
+
+    encoder:
+        hiddenSize: 256
+        numLayers: 2
+        activation: ELU
+
+    decoder:
+        hiddenSize: 256
+        numLayers: 2
+        activation: ELU
+
+    recurrentModel:
+        hiddenSize: 200
+        activation: Tanh
+
+    priorNet:
+        hiddenSize: 200
+        numLayers: 2
+        activation: Tanh
+        uniformMix: 0.01
+
+    posteriorNet:
+        hiddenSize: 200
+        numLayers: 2
+        activation: Tanh
+        uniformMix: 0.01
+
+    reward:
+        hiddenSize: 256
+        numLayers: 2
+        activation: ELU
+
+    continuation:
+        hiddenSize: 256
+        numLayers: 2
+        activation: ELU
+
+    actor:
+        hiddenSize: 256
+        numLayers: 2
+        activation: ELU
+
+    critic:
+        hiddenSize: 256
+        numLayers: 2
+        activation: ELU
+
+folderNames:
+    metricsFolder: metrics
+    plotsFolder: plots
+    checkpointsFolder: checkpoints
+    videosFolder: videos

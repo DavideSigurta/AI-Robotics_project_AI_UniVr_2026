@@ -10,3 +10,4 @@ videos/
 *.egg-info
 dist/
 build/
+*.md
