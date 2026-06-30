@@ -5,7 +5,7 @@ crash rate, timeout rate, mean episode length, and mean cumulative
 reward. No Modal, no CoppeliaSim — pure local eval on custom env.
 
 Usage:
-    python evaluate_ppo.py --checkpoint checkpoints_ppo/ppo_limo_final.zip
+    python evaluate_ppo.py --checkpoint results/checkpoints_ppo/ppo_limo_final.zip
     python evaluate_ppo.py --checkpoint model.zip --episodes 50 --seed 0
     python evaluate_ppo.py --self-check                    # run tests only
 """
@@ -65,7 +65,7 @@ def evaluate(
             results (list of dicts per episode)
 
     Example:
-        >>> stats = evaluate('checkpoints_ppo/ppo_limo_final.zip',
+        >>> stats = evaluate('results/checkpoints_ppo/ppo_limo_final.zip',
         ...                  n_episodes=10, curriculum_stage=0)
         >>> stats['goal_rate']
         0.3

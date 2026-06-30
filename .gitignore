@@ -13,4 +13,4 @@ build/
 *.md
 reports/
 tb_ppo/
-checkpoints_PPO/
+results/

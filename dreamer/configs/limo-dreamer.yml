@@ -1,6 +1,8 @@
-# DreamerV3 configuration for the LIMO environment
+# DreamerV3 configuration for LimoCustomEnv — FINAL version
+# Hyperparameters: entropyScale=0.0001, reconstruction std=0.3
+# Curriculum stages: 0→1 at 19200 gs, 1→2 at 43200 gs (32% / 72% of 60k)
 environmentName: LimoCustomEnv
-runName: v1
+runName: final
 seed: 42
 
 gradientSteps: 60000
@@ -9,7 +11,7 @@ saveMetrics: True
 saveCheckpoints: True
 checkpointInterval: 5000
 resume: False
-checkpointToLoad: 50k
+checkpointToLoad: 45k
 
 episodesBeforeStart: 10
 numInteractionEpisodes: 1
@@ -37,7 +39,7 @@ dreamer:
     freeNats: 1
     betaPrior: 1.0
     betaPosterior: 0.1
-    entropyScale: 0.001
+    entropyScale: 0.0001
 
     buffer:
         capacity: 100000
@@ -89,7 +91,6 @@ dreamer:
         activation: ELU
 
 folderNames:
-    metricsFolder: metrics
-    plotsFolder: plots
-    checkpointsFolder: checkpoints
-    videosFolder: videos
+    metricsFolder: results/metrics
+    plotsFolder: results/figures
+    checkpointsFolder: results/checkpoints_dreamer

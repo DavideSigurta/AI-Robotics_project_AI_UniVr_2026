@@ -23,8 +23,51 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 
 from limo_env import LimoCustomEnv
 
+import csv
 
-# ── Curriculum callback ────────────────────────────────────────────────────
+
+# ── CSV logging callback ──────────────────────────────────────────────────
+
+class CSVLogCallback(BaseCallback):
+    """SB3 callback that logs episode rewards to a CSV file.
+
+    Logs [total_timesteps, episode_reward] after each episode ends.
+    Uses Monitor's ``episode_rew`` from ``self.locals`` if available,
+    otherwise falls back to ``info["episode"]["r"]``.
+
+    Args:
+        csv_path: Path to the output CSV file.
+    """
+
+    def __init__(self, csv_path: str):
+        super().__init__(verbose=0)
+        self.csv_path = csv_path
+        self._file = None
+        self._writer = None
+        self._header_written = False
+
+    def _init_callback(self) -> None:
+        os.makedirs(os.path.dirname(self.csv_path), exist_ok=True)
+        self._file = open(self.csv_path, "w", newline="")
+        self._writer = csv.writer(self._file)
+
+    def _on_step(self) -> bool:
+        # Check if an episode just finished by looking at Monitor's info
+        info = self.locals.get("infos", [None])[0]
+        if info is not None and "episode" in info:
+            ep_info = info["episode"]
+            ts = self.model.num_timesteps
+            reward = ep_info["r"]
+            if not self._header_written:
+                self._writer.writerow(["envSteps", "totalReward"])
+                self._header_written = True
+            self._writer.writerow([ts, f"{reward:.6f}"])
+            self._file.flush()
+        return True
+
+    def _on_training_end(self) -> None:
+        if self._file is not None:
+            self._file.close()
 
 class CurriculumCallback(BaseCallback):
     """SB3 callback that advances obstacle difficulty at predefined timesteps.
@@ -119,8 +162,8 @@ def parse_args(argv=None):
         help='Checkpoint frequency in timesteps (default: 25000).'
     )
     parser.add_argument(
-        '--checkpoint-dir', type=str, default='checkpoints_ppo',
-        help='Directory for checkpoints (default: checkpoints_ppo).'
+        '--checkpoint-dir', type=str, default='results/checkpoints_ppo',
+        help='Directory for checkpoints (default: results/checkpoints_ppo).'
     )
     parser.add_argument(
         '--tb-log', type=str, default='tb_ppo',
@@ -129,6 +172,10 @@ def parse_args(argv=None):
     parser.add_argument(
         '--seed', type=int, default=42,
         help='Random seed for reproducibility (default: 42).'
+    )
+    parser.add_argument(
+        '--csv-log', type=str, default='results/metrics/ppo_training.csv',
+        help='Path for episode reward CSV logging (default: results/metrics/ppo_training.csv).'
     )
     parser.add_argument(
         '--self-check', action='store_true',
@@ -184,6 +231,8 @@ def main():
         name_prefix='ppo_limo',
     )
 
+    csv_log_cb = CSVLogCallback(csv_path=args.csv_log)
+
     # ── PPO Model (roadmap §5.2 — exact hyperparameters) ───────────────────
     model = PPO(
         'MlpPolicy',
@@ -202,7 +251,7 @@ def main():
     # ── Training ───────────────────────────────────────────────────────────
     model.learn(
         total_timesteps=args.timesteps,
-        callback=[curriculum_cb, checkpoint_cb],
+        callback=[curriculum_cb, checkpoint_cb, csv_log_cb],
     )
 
     # ── Save final model ───────────────────────────────────────────────────

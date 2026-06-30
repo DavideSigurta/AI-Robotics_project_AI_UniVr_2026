@@ -2,18 +2,17 @@
 import torch
 import torch.nn as nn
 from torch.distributions import kl_divergence, Independent, OneHotCategoricalStraightThrough, Normal
-import numpy as np
 import os
 
-from networks import RecurrentModel, PriorNet, PosteriorNet, RewardModel, ContinueModel, EncoderConv, DecoderConv, Actor, Critic
+from networks import RecurrentModel, PriorNet, PosteriorNet, RewardModel, ContinueModel, MLPEncoder, MLPDecoder, Actor, Critic
 from utils import computeLambdaValues, Moments
 from buffer import ReplayBuffer
-import imageio
 
 
 class Dreamer:
     def __init__(self, observationShape, actionSize, actionLow, actionHigh, device, config):
         self.observationShape   = observationShape
+        self.obs_dim            = observationShape[0]
         self.actionSize         = actionSize
         self.config             = config
         self.device             = device
@@ -24,8 +23,8 @@ class Dreamer:
 
         self.actor           = Actor(self.fullStateSize, actionSize, actionLow, actionHigh, device,                                  config.actor          ).to(self.device)
         self.critic          = Critic(self.fullStateSize,                                                                            config.critic         ).to(self.device)
-        self.encoder         = EncoderConv(observationShape, self.config.encodedObsSize,                                             config.encoder        ).to(self.device)
-        self.decoder         = DecoderConv(self.fullStateSize, observationShape,                                                     config.decoder        ).to(self.device)
+        self.encoder         = MLPEncoder(self.obs_dim, self.config.encodedObsSize,                                                  config.encoder        ).to(self.device)
+        self.decoder         = MLPDecoder(self.fullStateSize, self.obs_dim,                                                          config.decoder        ).to(self.device)
         self.recurrentModel  = RecurrentModel(config.recurrentSize, self.latentSize, actionSize,                                     config.recurrentModel ).to(self.device)
         self.priorNet        = PriorNet(config.recurrentSize, config.latentLength, config.latentClasses,                             config.priorNet       ).to(self.device)
         self.posteriorNet    = PosteriorNet(config.recurrentSize + config.encodedObsSize, config.latentLength, config.latentClasses, config.posteriorNet   ).to(self.device)
@@ -50,7 +49,7 @@ class Dreamer:
         self.totalGradientSteps = 0
 
     def worldModelTraining(self, data):
-        encodedObservations = self.encoder(data.observations.view(-1, *self.observationShape)).view(self.config.batchSize, self.config.batchLength, -1)
+        encodedObservations = self.encoder(data.observations.view(-1, self.obs_dim)).view(self.config.batchSize, self.config.batchLength, -1)
         previousRecurrentState  = torch.zeros(self.config.batchSize, self.recurrentSize,    device=self.device)
         previousLatentState     = torch.zeros(self.config.batchSize, self.latentSize,       device=self.device)
 
@@ -74,8 +73,12 @@ class Dreamer:
         posteriorsLogits            = torch.stack(posteriorsLogits,             dim=1) # (batchSize, batchLength-1, latentLength, latentClasses)
         fullStates                  = torch.cat((recurrentStates, posteriors), dim=-1) # (batchSize, batchLength-1, recurrentSize + latentLength*latentClasses)
 
-        reconstructionMeans        =  self.decoder(fullStates.view(-1, self.fullStateSize)).view(self.config.batchSize, self.config.batchLength-1, *self.observationShape)
-        reconstructionDistribution =  Independent(Normal(reconstructionMeans, 1), len(self.observationShape))
+        reconstructionMeans        =  self.decoder(fullStates.view(-1, self.fullStateSize)).view(self.config.batchSize, self.config.batchLength-1, self.obs_dim)
+        # ADAPT: fixed std=0.3 (was 1.0) for 23-dim vector obs.
+        # Original std=1 was designed for 64x64x3 pixel obs (12288 dims → strong
+        # total gradient despite per-pixel std=1). With 23-dim vectors the total
+        # reconstruction gradient was ~60x weaker, stalling decoder learning.
+        reconstructionDistribution =  Independent(Normal(reconstructionMeans, 0.3), 1)
         reconstructionLoss         = -reconstructionDistribution.log_prob(data.observations[:, 1:]).mean()
 
         rewardDistribution  =  self.rewardPredictor(fullStates)
@@ -98,7 +101,12 @@ class Dreamer:
 
         if self.config.useContinuationPrediction:
             continueDistribution = self.continuePredictor(fullStates)
-            continueLoss         = nn.BCELoss(continueDistribution.probs, 1 - data.dones[:, 1:])
+            # BUGFIX (pre-existing in NaturalDreamer, unrelated to MLP migration):
+            # nn.BCELoss is a class, not callable — original code
+            # `nn.BCELoss(probs, target)` would crash at runtime.
+            # Also, Bernoulli.probs shape (B,T-1) != dones shape (B,T-1,1),
+            # so squeeze(-1) needed for F.binary_cross_entropy shape match.
+            continueLoss         = nn.functional.binary_cross_entropy(continueDistribution.probs, (1 - data.dones[:, 1:]).squeeze(-1))
             worldModelLoss      += continueLoss.mean()
 
         self.worldModelOptimizer.zero_grad()
@@ -172,7 +180,7 @@ class Dreamer:
             observation = env.reset(seed=(seed + self.totalEpisodes if seed else None))
             encodedObservation = self.encoder(torch.from_numpy(observation).float().unsqueeze(0).to(self.device))
 
-            currentScore, stepCount, done, frames = 0, 0, False, []
+            currentScore, stepCount, done = 0, 0, False
             while not done:
                 recurrentState      = self.recurrentModel(recurrentState, latentState, action)
                 latentState, _      = self.posteriorNet(torch.cat((recurrentState, encodedObservation.view(1, -1)), -1))
@@ -182,12 +190,6 @@ class Dreamer:
                 nextObservation, reward, done = env.step(actionNumpy)
                 if not evaluation:
                     self.buffer.add(observation, actionNumpy, reward, nextObservation, done)
-
-                if saveVideo and i == 0:
-                    frame = env.render()
-                    targetHeight = (frame.shape[0] + macroBlockSize - 1)//macroBlockSize*macroBlockSize
-                    targetWidth = (frame.shape[1] + macroBlockSize - 1)//macroBlockSize*macroBlockSize
-                    frames.append(np.pad(frame, ((0, targetHeight - frame.shape[0]), (0, targetWidth - frame.shape[1]), (0, 0)), mode='edge'))
 
                 encodedObservation = self.encoder(torch.from_numpy(nextObservation).float().unsqueeze(0).to(self.device))
                 observation = nextObservation
@@ -200,11 +202,6 @@ class Dreamer:
                         self.totalEpisodes += 1
                         self.totalEnvSteps += stepCount
 
-                    if saveVideo and i == 0:
-                        finalFilename = f"{filename}_reward_{currentScore:.0f}.mp4"
-                        with imageio.get_writer(finalFilename, fps=fps) as video:
-                            for frame in frames:
-                                video.append_data(frame)
                     break
         return sum(scores)/numEpisodes if numEpisodes else None
 

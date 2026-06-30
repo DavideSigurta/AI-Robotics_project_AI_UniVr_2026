@@ -123,6 +123,92 @@ class DecoderConv(nn.Module):
         return self.network(x)
 
 
+class MLPEncoder(nn.Module):
+    """Feedforward encoder replacing EncoderConv for vector observations.
+
+    Uses sequentialModel1D — same pattern as PriorNet/PosteriorNet.
+    No convolutional layers; processes flat observation vectors directly.
+
+    Args:
+        obs_dim: Input observation dimension (e.g., 23 for LimoCustomEnv).
+        output_size: Encoded representation dimension (e.g., 128).
+        config: Config object with hiddenSize, numLayers, activation.
+
+    Example:
+        >>> enc = MLPEncoder(23, 128, config)
+        >>> out = enc(torch.randn(4, 23))
+        >>> out.shape
+        torch.Size([4, 128])
+    """
+    def __init__(self, obs_dim, output_size, config):
+        super().__init__()
+        self.output_size = output_size
+        self.net = sequentialModel1D(
+            obs_dim,
+            [config.hiddenSize] * config.numLayers,
+            output_size,
+            config.activation)
+
+    def forward(self, x):
+        """Encode observation vector.
+
+        Args:
+            x: Tensor of shape (..., obs_dim). Leading dims are preserved.
+
+        Returns:
+            Tensor of shape (..., output_size).
+
+        Example:
+            >>> enc = MLPEncoder(23, 128, config)
+            >>> enc(torch.randn(2, 4, 23)).shape
+            torch.Size([2, 4, 128])
+        """
+        return self.net(x.view(-1, x.shape[-1])).view(*x.shape[:-1], self.output_size)
+
+
+class MLPDecoder(nn.Module):
+    """Feedforward decoder replacing DecoderConv for vector observations.
+
+    Outputs raw mean values for Normal(mean, 1) reconstruction loss.
+    No activation on final layer — same pattern as RewardModel/Critic.
+
+    Args:
+        input_size: Input dimension (typically fullStateSize = recurrent + latent).
+        obs_dim: Output observation dimension to reconstruct (e.g., 23).
+        config: Config object with hiddenSize, numLayers, activation.
+
+    Example:
+        >>> dec = MLPDecoder(512, 23, config)
+        >>> out = dec(torch.randn(4, 512))
+        >>> out.shape
+        torch.Size([4, 23])
+    """
+    def __init__(self, input_size, obs_dim, config):
+        super().__init__()
+        self.obs_dim = obs_dim
+        self.net = sequentialModel1D(
+            input_size,
+            [config.hiddenSize] * config.numLayers,
+            obs_dim,
+            config.activation)
+
+    def forward(self, x):
+        """Decode latent state back to observation reconstruction.
+
+        Args:
+            x: Tensor of shape (..., input_size). Leading dims preserved.
+
+        Returns:
+            Tensor of shape (..., obs_dim) — raw mean values.
+
+        Example:
+            >>> dec = MLPDecoder(512, 23, config)
+            >>> dec(torch.randn(2, 4, 512)).shape
+            torch.Size([2, 4, 23])
+        """
+        return self.net(x)
+
+
 class Actor(nn.Module):
     def __init__(self, inputSize, actionSize, actionLow, actionHigh, device, config):
         super().__init__()
@@ -160,3 +246,63 @@ class Critic(nn.Module):
     def forward(self, x):
         mean, logStd = self.network(x).chunk(2, dim=-1)
         return Normal(mean.squeeze(-1), torch.exp(logStd).squeeze(-1))
+
+
+if __name__ == '__main__':
+    # ── Self-check: MLPEncoder and MLPDecoder ──────────────────────────
+    print('=== SELF-CHECK: networks.py (MLPEncoder / MLPDecoder) ===')
+
+    class _MockConfig:
+        pass
+
+    cfg = _MockConfig()
+    cfg.hiddenSize = 256
+    cfg.numLayers = 2
+    cfg.activation = 'ELU'
+
+    obs_dim = 23
+    output_size = 128
+    full_state_size = 512  # 256 recurrent + 256 latent (latentLength*latentClasses = 16*16)
+
+    # Test 1: MLPEncoder
+    encoder = MLPEncoder(obs_dim, output_size, cfg)
+    dummy_obs = torch.randn(4, obs_dim)
+    encoded = encoder(dummy_obs)
+    expected_shape = (4, output_size)
+    passed_1 = encoded.shape == expected_shape
+    print(f'MLPEncoder: input (4, {obs_dim}) → output {tuple(encoded.shape)} '
+          f'(expected {expected_shape}) — {"PASS" if passed_1 else "FAIL"}')
+    assert passed_1, f'Encoder shape mismatch: got {encoded.shape}, expected {expected_shape}'
+
+    # Test 2: MLPDecoder
+    decoder = MLPDecoder(full_state_size, obs_dim, cfg)
+    dummy_state = torch.randn(4, full_state_size)
+    decoded = decoder(dummy_state)
+    expected_shape = (4, obs_dim)
+    passed_2 = decoded.shape == expected_shape
+    print(f'MLPDecoder: input (4, {full_state_size}) → output {tuple(decoded.shape)} '
+          f'(expected {expected_shape}) — {"PASS" if passed_2 else "FAIL"}')
+    assert passed_2, f'Decoder shape mismatch: got {decoded.shape}, expected {expected_shape}'
+
+    # Test 3: MLPEncoder preserves batch dims with 3D input
+    dummy_obs_3d = torch.randn(2, 4, obs_dim)
+    encoded_3d = encoder(dummy_obs_3d)
+    expected_shape_3d = (2, 4, output_size)
+    passed_3 = encoded_3d.shape == expected_shape_3d
+    print(f'MLPEncoder 3D: input (2, 4, {obs_dim}) → output {tuple(encoded_3d.shape)} '
+          f'(expected {expected_shape_3d}) — {"PASS" if passed_3 else "FAIL"}')
+    assert passed_3, f'Encoder 3D shape mismatch: got {encoded_3d.shape}, expected {expected_shape_3d}'
+
+    # Test 4: MLPDecoder preserves batch dims with 3D input
+    dummy_state_3d = torch.randn(2, 4, full_state_size)
+    decoded_3d = decoder(dummy_state_3d)
+    expected_shape_3d = (2, 4, obs_dim)
+    passed_4 = decoded_3d.shape == expected_shape_3d
+    print(f'MLPDecoder 3D: input (2, 4, {full_state_size}) → output {tuple(decoded_3d.shape)} '
+          f'(expected {expected_shape_3d}) — {"PASS" if passed_4 else "FAIL"}')
+    assert passed_4, f'Decoder 3D shape mismatch: got {decoded_3d.shape}, expected {expected_shape_3d}'
+
+    print(f'All tests: {"PASS" if all([passed_1, passed_2, passed_3, passed_4]) else "FAIL"}')
+    print(f'(Note: roadmap §6.2 says input_size=272 (256+16) but dreamer.py __init__ '
+          f'gives fullStateSize = recurrentSize + latentLength*latentClasses '
+          f'= 256 + 16*16 = 512. Used 512.)')
