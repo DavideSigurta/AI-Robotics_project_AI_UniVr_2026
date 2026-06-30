@@ -4,9 +4,10 @@ Trains a PPO agent (Stable-Baselines3) on LimoCustomEnv with curriculum
 learning. Supports checkpointing, TensorBoard logging, and arg overrides.
 
 Usage:
-    python train_ppo.py                          # default: 250k steps
-    python train_ppo.py --timesteps 50000        # quick test
-    python train_ppo.py --seed 0 --tb-log ./tb   # custom
+    python train_ppo.py                          # train 250k steps (default)
+    python train_ppo.py --timesteps 50000        # quick training
+    python train_ppo.py --seed 0 --tb-log ./tb   # custom logging
+    python train_ppo.py --self-check             # run tests only, no training
 """
 
 import argparse
@@ -17,6 +18,7 @@ import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.env_checker import check_env
+from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 from limo_env import LimoCustomEnv
@@ -69,8 +71,11 @@ class CurriculumCallback(BaseCallback):
         for boundary, stage in sorted(self.STAGE_BOUNDARIES.items()):
             if ts >= boundary and self._current_stage < stage:
                 self._current_stage = stage
-                # Access underlying env through VecEnv wrapper
+                # Access underlying env through VecEnv wrapper.
+                # Unwrap through SB3 wrappers (Monitor etc.) to reach LimoCustomEnv.
                 env = self.training_env.envs[0]
+                while hasattr(env, 'env'):
+                    env = env.env
                 env.set_curriculum_stage(stage)
                 if self.verbose > 0:
                     print(
@@ -125,6 +130,10 @@ def parse_args(argv=None):
         '--seed', type=int, default=42,
         help='Random seed for reproducibility (default: 42).'
     )
+    parser.add_argument(
+        '--self-check', action='store_true',
+        help='Run self-check tests instead of training (default: False).'
+    )
     return parser.parse_args(argv)
 
 
@@ -158,11 +167,11 @@ def main():
 
     # ── Environment (start at curriculum stage 0) ──────────────────────────
     def make_env():
-        return LimoCustomEnv(
+        return Monitor(LimoCustomEnv(
             n_obstacles_range=(2, 4),
             obs_radius_range=(0.10, 0.15),
             randomize_goal=True,
-        )
+        ))
 
     env = DummyVecEnv([make_env])
 
@@ -206,7 +215,26 @@ def main():
 
 # ── Self-check ─────────────────────────────────────────────────────────────
 
-if __name__ == '__main__':
+def run_self_check() -> int:
+    """Run all self-check tests for the training module.
+
+    Pre: None.
+    Post: Prints PASS/FAIL for each test. Returns number of passed tests.
+
+    Tests:
+        1. LimoCustomEnv passes SB3 env_checker.
+        2. PPO model instantiates with roadmap §5.2 hyperparameters.
+        3. CurriculumCallback advances stages at correct timestep thresholds.
+        4. 1000-step training produces valid actions in [v∈[0,1], w∈[-1,1]].
+
+    Returns:
+        int: Number of passed tests (0-4).
+
+    Example:
+        >>> n = run_self_check()
+        >>> n == 4
+        True
+    """
     print('=== SELF-CHECK: train_ppo.py ===')
     n_pass = 0
     n_total = 4
@@ -386,4 +414,16 @@ if __name__ == '__main__':
         print('All SELF-CHECK tests passed.')
     else:
         print(f'SOME TESTS FAILED ({n_total - n_pass} failures).')
-        sys.exit(1)
+
+    return n_pass
+
+
+# ── Entry point ────────────────────────────────────────────────────────────
+
+if __name__ == '__main__':
+    args = parse_args()
+    if args.self_check:
+        n = run_self_check()
+        sys.exit(0 if n == 4 else 1)
+    else:
+        main()

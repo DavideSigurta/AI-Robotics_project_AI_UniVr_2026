@@ -7,6 +7,7 @@ LIDAR_FOV          = 2 * np.pi / 3   # 120 degrees — verified from CoppeliaSim
 N_LIDAR            = 20
 GOAL_BONUS         = 10.0
 CRASH_COST         = 10.0
+STEP_PENALTY       = -0.01  # per-step cost to discourage standing still
 OBSTACLE_SAFE_DIST = 0.3
 CRASH_DIST         = 0.15
 GOAL_DIST          = 0.1
@@ -80,6 +81,12 @@ def compute_reward(distance, prev_distance, lidar_norm,
     min_lidar_m = float(np.min(lidar_norm)) * LIDAR_MAX_DIST
     reward -= obstacle_penalty(min_lidar_m)
 
+    # Small per-step cost to discourage v=0 equilibrium.
+    # Not applied on terminal steps (goal or crash) so that
+    # the terminal bonus/cost dominates the step's total.
+    if not terminated_goal and not terminated_crash:
+        reward += STEP_PENALTY
+
     # Terminal outcomes
     if terminated_goal:
         reward += GOAL_BONUS
@@ -137,47 +144,47 @@ if __name__ == '__main__':
     lidar_near_obs = np.full(20, 0.3, dtype=np.float32)       # min = 0.3 * 5.0 = 1.5 m
     lidar_crash = np.full(20, 0.02, dtype=np.float32)         # min = 0.02 * 5.0 = 0.1 m < 0.15
 
-    # Test 1: normal step, far from obstacles, moving toward goal
+    # Test 1: normal step, far from obstacles, moving toward goal (non-terminal)
     r1 = compute_reward(distance=1.0, prev_distance=1.2,
                         lidar_norm=lidar_clear,
                         terminated_goal=False, terminated_crash=False)
-    expected_1 = (1.2 - 1.0) - 0.0  # shaping only
+    expected_1 = (1.2 - 1.0) - 0.0 + STEP_PENALTY  # shaping + step cost
     print(f'Test 1 - normal approach:       got {r1:.4f}, expected {expected_1:.4f}')
     assert abs(r1 - expected_1) < 1e-6, f'MISMATCH: {r1} != {expected_1}'
 
-    # Test 2: closer to goal than previous step -> larger positive shaping
+    # Test 2: closer to goal than previous step -> larger positive shaping (non-terminal)
     r2 = compute_reward(distance=0.3, prev_distance=0.9,
                         lidar_norm=lidar_clear,
                         terminated_goal=False, terminated_crash=False)
-    expected_2 = (0.9 - 0.3) - 0.0  # 0.6 shaping
+    expected_2 = (0.9 - 0.3) - 0.0 + STEP_PENALTY  # 0.6 shaping + step cost
     print(f'Test 2 - strong approach:       got {r2:.4f}, expected {expected_2:.4f}')
     assert abs(r2 - expected_2) < 1e-6, f'MISMATCH: {r2} != {expected_2}'
 
-    # Test 3: obstacle nearby -> penalty applied
+    # Test 3: obstacle nearby -> penalty applied (non-terminal)
     r3 = compute_reward(distance=0.8, prev_distance=0.8,
                         lidar_norm=lidar_near_obs,
                         terminated_goal=False, terminated_crash=False)
     min_lidar_m_3 = float(np.min(lidar_near_obs)) * LIDAR_MAX_DIST  # 0.3 * 5.0 = 1.5
     pen_3 = 0.0 if min_lidar_m_3 >= OBSTACLE_SAFE_DIST else (OBSTACLE_SAFE_DIST - min_lidar_m_3) / OBSTACLE_SAFE_DIST
-    expected_3 = 0.0 - pen_3
+    expected_3 = 0.0 - pen_3 + STEP_PENALTY  # penalty + step cost
     print(f'Test 3 - obstacle penalty:      got {r3:.4f}, expected {expected_3:.4f}')
     assert abs(r3 - expected_3) < 1e-6, f'MISMATCH: {r3} != {expected_3}'
 
-    # Test 4: goal reached -> bonus applied
+    # Test 4: goal reached -> bonus applied (terminal, NO step penalty)
     r4 = compute_reward(distance=0.05, prev_distance=0.5,
                         lidar_norm=lidar_clear,
                         terminated_goal=True, terminated_crash=False)
-    expected_4 = (0.5 - 0.05) + GOAL_BONUS  # shaping + 10.0
+    expected_4 = (0.5 - 0.05) + GOAL_BONUS  # shaping + bonus, no STEP_PENALTY
     print(f'Test 4 - goal reached (+bonus):  got {r4:.4f}, expected {expected_4:.4f}')
     assert abs(r4 - expected_4) < 1e-6, f'MISMATCH: {r4} != {expected_4}'
 
-    # Test 5: crash -> penalty applied
+    # Test 5: crash -> penalty applied (terminal, NO step penalty)
     r5 = compute_reward(distance=0.5, prev_distance=0.5,
                         lidar_norm=lidar_crash,
                         terminated_goal=False, terminated_crash=True)
     min_lidar_m_5 = float(np.min(lidar_crash)) * LIDAR_MAX_DIST  # 0.02 * 5.0 = 0.1
     pen_5 = (OBSTACLE_SAFE_DIST - min_lidar_m_5) / OBSTACLE_SAFE_DIST  # (0.3 - 0.1) / 0.3
-    expected_5 = 0.0 - pen_5 - CRASH_COST
+    expected_5 = 0.0 - pen_5 - CRASH_COST  # no STEP_PENALTY on terminal
     print(f'Test 5 - crash (-cost):          got {r5:.4f}, expected {expected_5:.4f}')
     assert abs(r5 - expected_5) < 1e-6, f'MISMATCH: {r5} != {expected_5}'
 
@@ -196,6 +203,14 @@ if __name__ == '__main__':
     print(f'check_goal_reached(far):     {check_goal_reached(pos_far, GOAL_FIXED_POS)} (expected False)')
     assert check_goal_reached(pos_at_goal, GOAL_FIXED_POS)
     assert not check_goal_reached(pos_far, GOAL_FIXED_POS)
+
+    # Test 6: standing still (v=0), no progress, clear lidar -> reward = STEP_PENALTY
+    r6 = compute_reward(distance=1.0, prev_distance=1.0,
+                        lidar_norm=lidar_clear,
+                        terminated_goal=False, terminated_crash=False)
+    expected_6 = STEP_PENALTY  # no shaping (prev - dist = 0), no obstacle, no terminal
+    print(f'Test 6 - standing still:        got {r6:.4f}, expected {expected_6:.4f}')
+    assert abs(r6 - expected_6) < 1e-6, f'MISMATCH: {r6} != {expected_6}'
 
     print()
     print('All SELF-CHECK tests passed.')

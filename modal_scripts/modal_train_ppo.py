@@ -68,6 +68,9 @@ class CurriculumCallback(BaseCallback):
             if ts >= boundary and self._current_stage < stage:
                 self._current_stage = stage
                 env = self.training_env.envs[0]
+                # Unwrap through SB3 wrappers (Monitor etc.) to reach LimoCustomEnv.
+                while hasattr(env, 'env'):
+                    env = env.env
                 env.set_curriculum_stage(stage)
                 if self.verbose > 0:
                     print(
@@ -141,6 +144,7 @@ def train_ppo(total_timesteps: int = 250_000) -> str:
     import numpy as np
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import CheckpointCallback
+    from stable_baselines3.common.monitor import Monitor
     from stable_baselines3.common.vec_env import DummyVecEnv
 
     # Source files copied into /root/ by the image definition above
@@ -149,11 +153,11 @@ def train_ppo(total_timesteps: int = 250_000) -> str:
 
     # ── Environment (start at curriculum stage 0) ──────────────────────────
     def make_env():
-        return LimoCustomEnv(
+        return Monitor(LimoCustomEnv(
             n_obstacles_range=(2, 4),
             obs_radius_range=(0.10, 0.15),
             randomize_goal=True,
-        )
+        ))
 
     env = DummyVecEnv([make_env])
 
